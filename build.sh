@@ -28,7 +28,7 @@ CHAT_ID="-1001421078455"
 TOKEN="bot1446507242:AAFivf422Yvh3CL7y98TJmxV1KgyKByuPzM/sendMessage"
 export KBUILD_BUILD_USER=Wstudiawan
 export KBUILD_BUILD_HOST=DominatingMachine
-AK_BRANCH="munch"
+AK_BRANCH="Wstudiawan-patch-1"
 
 if [[ ! -d $TC/clang || ! -d $TC/gcc64 || ! -d $TC/gcc32 ]]; then
   git clone https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 --depth=1 --no-tags --single-branch -b master $TC/clang
