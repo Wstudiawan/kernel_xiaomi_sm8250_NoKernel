@@ -67,6 +67,14 @@ FINAL_ZIP=${ZIPNAME}-${VERSION}-${DEVICE}-Klinker-KERNEL-MIUI-${TM}.zip
 # Specify compiler [ proton, nexus, aosp ]
 COMPILER=aosp
 
+# KernelSU
+git config --global user.email "manusiasampah7@gmail.com"
+git config --global user.name "Wstudiawan"
+curl https://gist.githubusercontent.com/bagaskara815/5aeb07f0d9031189871ffa362591b20f/raw/ksu.patch >> ksu.patch
+git am ksu.patch
+curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s main
+
+
 # Clone ToolChain
 function cloneTC() {
 	
