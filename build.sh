@@ -1,340 +1,396 @@
 #!/usr/bin/env bash
 
-# Copyright (c) 2021 CloudedQuartz
-# Copyright (c) 2021-2024 Diaz1401
+ #
+ # Script For Building Android Kernel
+ #
 
-ARG=$@
-ERRORMSG="\
-Usage: ./build-gcc.sh argument\n\
-Available argument:\n\
-  clang           use LLVM Clang\n\
-  gcc             use GCC\n\
-  opt             enable cat_optimize\n\
-  lto             enable LTO\n\
-  pgo             enable PGO\n\~
-  dce             enable dead code and data elimination\n\
-  gcov            enable gcov profiling\n\
-  beta            download experimental toolchain\n\
-  stable          download stable toolchain\n\
-  beta-TAG        spesific experimental toolchain tag\n\
-  stable-TAG      spesific stable toolchain tag\n\n\
-valid stable toolchain tag:\n\
-  https://github.com/Diaz1401/clang-stable/releases\n\
-  https://github.com/Diaz1401/gcc-stable/releases\n\
-valid experimental toolchain tag:\n\
-  https://github.com/Mengkernel/clang/releases\n\
-  https://github.com/Mengkernel/gcc/releases"
+# Specify Kernel Directory
+KERNEL_DIR="$(pwd)"
 
-if [ -z "$ARG" ]; then
-  echo -e "$ERRORMSG"
-  exit 1
-else
-  for i in $ARG; do
-    case "$i" in
-      clang) CLANG=true;;
-      gcc) GCC=true;;
-      opt) CAT=true;;
-      lto) LTO=true;;
-      pgo) PGO=true;;
-      dce) DCE=true;;
-      gcov) GCOV=true;;
-      beta) BETA=true;;
-      stable) STABLE=true;;
-      beta-*) BETA=$(echo "$i" | sed s/beta-//g);;
-      stable-*) STABLE=$(echo "$i" | sed s/stable-//g);;
-      *) echo -e "$ERRORMSG"; exit 1;;
-    esac
-  done
-  if [ -z "$GCC" ] && [ -z "$CLANG" ]; then
-    echo "toolchain not specified"
-    exit 1; fi
-  if [ ! -z "$GCC" ] && [ ! -z "$CLANG" ]; then
-    echo "do not use both gcc and clang"
-    exit 1; fi
-  if [ ! -z "$PGO" ] && [ ! -z "$GCOV" ]; then
-    echo "do not use both gcov and pgo"
-    exit 1; fi
-  if [ -z "$STABLE" ] && [ -z "$BETA" ]; then
-    echo "specify stable or beta"
-    exit 1; fi
-  if [ ! -z "$STABLE" ] && [ ! -z "$BETA" ]; then
-    echo "do not use both stable and beta"
-    exit 1; fi
-  if [ "$STABLE" == "true" ] || [ "$BETA" == "true" ]; then
-    USE_LATEST=true
-  fi
+BUILD=$1
+
+if [ "$BUILD" = "local" ]; then
+	if [ -e ids.txt ]; then
+		chat_id=$(awk "NR==1{print;exit}" ids.txt)
+		token=$(awk "NR==2{print;exit}" ids.txt)
+	else
+		echo "Type ur chat id:"
+		read chat
+		echo "$chat" > ids.txt
+		chat_id=$chat
+		echo "Type ur bot token:"
+		read token
+		echo "$token" >> ids.txt
+		token=$token
+	fi
 fi
 
-# Silence all safe.directory warnings
-git config --global --add safe.directory '*'
+DEVICE=$2
 
-KERNEL_NAME=Kucing
-KERNEL_DIR=$(pwd)
-NPROC=$(nproc --all)
-AK3=${KERNEL_DIR}/AnyKernel3
-TOOLCHAIN=${KERNEL_DIR}/toolchain
-LOG=${KERNEL_DIR}/log.txt
-KERNEL_DTB=${KERNEL_DIR}/out/arch/arm64/boot/dtb
-KERNEL_IMG=${KERNEL_DIR}/out/arch/arm64/boot/Image
-KERNEL_IMG_DTB=${KERNEL_DIR}/out/arch/arm64/boot/Image-dtb
-KERNEL_IMG_GZ_DTB=${KERNEL_DIR}/out/arch/arm64/boot/Image.gz-dtb
-KERNEL_DTBO=${KERNEL_DIR}/out/arch/arm64/boot/dtbo.img
-TELEGRAM_CHAT=-1001180467256
-#unused TELEGRAM_TOKEN=${TELEGRAM_TOKEN}
-DATE=$(date +"%Y%m%d")
-COMMIT=$(git log --pretty=format:"%s" -1)
-COMMIT_SHA=$(git rev-parse --short HEAD)
-KERNEL_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-BUILD_DATE=$(date)
-KBUILD_BUILD_USER=Diaz
-PATH=${TOOLCHAIN}/bin:${PATH}
-# Colors
-WHITE='\033[0m'
-RED='\033[1;31m'
-GREEN='\033[1;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[1;34m'
+VERSION=BETA
+if [ "${DEVICE}" = "alioth" ]; then
+DEFCONFIG=alioth_defconfig
+MODEL="Poco F3"
+elif [ "${DEVICE}" = "lmi" ]; then
+DEFCONFIG=lmi_defconfig
+MODEL="Poco F2 Pro"
+elif [ "${DEVICE}" = "apollo" ]; then
+DEFCONFIG=apollo_defconfig
+MODEL="Mi 10T Pro"
+elif [ "${DEVICE}" = "munch" ]; then
+DEFCONFIG=vendor/munch_defconfig
+MODEL="Poco F4"
+elif [ "${DEVICE}" = "cas" ]; then
+DEFCONFIG=cas_defconfig
+MODEL="Mi 10 Ultra"
+elif [ "${DEVICE}" = "cmi" ]; then
+DEFCONFIG=cmi_defconfig
+MODEL="Mi 10 Pro"
+elif [ "${DEVICE}" = "umi" ]; then
+DEFCONFIG=umi_defconfig
+MODEL="Mi 10"
+fi
 
-export NPROC KERNEL_NAME KERNEL_DIR AK3 TOOLCHAIN LOG KERNEL_DTB KERNEL_IMG KERNEL_IMG_DTB KERNEL_IMG_GZ_DTB KERNEL_DTBO TELEGRAM_CHAT DATE COMMIT COMMIT_SHA KERNEL_BRANCH BUILD_DATE KBUILD_BUILD_USER PATH WHITE RED GREEN YELLOW BLUE CLANG GCC CAT LTO PGO GCOV STABLE BETA USE_LATEST
+# Files
+IMAGE=$(pwd)/out/arch/arm64/boot/Image.gz
+DTBO=$(pwd)/out/arch/arm64/boot/dtbo.img
+DTB=$(pwd)/out/arch/arm64/boot/dtb
+OUT_DIR=out/
+#dts_source=arch/arm64/boot/dts/vendor/qcom
 
-echo "LC_ALL=en_US.UTF-8" | sudo tee -a /etc/environment
-echo "en_US.UTF-8 UTF-8" | sudo tee -a /etc/locale.gen
-echo "LANG=en_US.UTF-8" | sudo tee -a /etc/locale.conf
-sudo locale-gen en_US.UTF-8
-sudo dkpg-reconfigure locales
+# Verbose Build
+VERBOSE=0
 
-echo -e "${YELLOW}Revision ===> ${BLUE}Thu Feb 22 03:38:08 PM WIB 2024${WHITE}"
+# Kernel Version
+KERVER=$(make kernelversion)
 
-#
-# Clone Toolchain
-clone_tc(){
-  if [ -a "$TOOLCHAIN" ]; then
-    echo -e "${YELLOW}===> ${BLUE}Removing old toolchain${WHITE}"
-    rm -rf $TOOLCHAIN
-  fi
-  echo -e "${YELLOW}===> ${BLUE}Downloading Toolchain${WHITE}"
-  mkdir -p "$TOOLCHAIN"
-  if [ "$GCC" == "true" ]; then
-    if [ "$USE_LATEST" == "true" ]; then
-      if [ ! -z "$STABLE" ]; then
-        curl -s https://api.github.com/repos/Diaz1401/gcc-stable/releases/latest | grep "browser_download_url" | cut -d '"' -f4 | wget -qO gcc.tar.zst -i -
-      else
-        curl -s https://api.github.com/repos/Mengkernel/gcc/releases/latest | grep "browser_download_url" | cut -d '"' -f4 | wget -qO gcc.tar.zst -i -
-      fi
-    else
-      if [ ! -z "$STABLE" ]; then
-        wget -qO gcc.tar.zst https://github.com/Diaz1401/gcc-stable/releases/download/${STABLE}/gcc.tar.zst
-      else
-        wget -qO gcc.tar.zst https://github.com/Mengkernel/gcc/releases/download/${BETA}/gcc.tar.zst
-      fi
-    fi
-    tar xf gcc.tar.zst -C $TOOLCHAIN
-  else
-    if [ "$USE_LATEST" == "true" ]; then
-      if [ ! -z "$STABLE" ]; then
-        curl -s https://api.github.com/repos/Diaz1401/clang-stable/releases/latest |
-        grep "browser_download_url" |
-        cut -d '"' -f4 |
-        wget -qO clang.tar.zst -i -
-      else
-        curl -s https://api.github.com/repos/Mengkernel/clang/releases/latest |
-          grep "browser_download_url" |
-          cut -d '"' -f4 |
-          wget -qO clang.tar.zst -i -
-      fi
-    else
-      if [ ! -z "$STABLE" ]; then
-        wget -qO clang.tar.zst https://github.com/Diaz1401/clang-stable/releases/download/${STABLE}/clang.tar.zst
-      else
-        wget -qO clang.tar.zst https://github.com/Mengkernel/clang/releases/download/${BETA}/clang.tar.zst
-      fi
-    fi
-    tar xf clang.tar.zst -C $TOOLCHAIN
-  fi
+COMMIT_HEAD=$(git log --oneline -1)
+
+# Date and Time
+DATE=$(TZ=Europe/Lisbon date +"%Y%m%d-%T")
+TM=$(date +"%F%S")
+
+# Specify Final Zip Name
+ZIPNAME=Nexus
+FINAL_ZIP=${ZIPNAME}-${VERSION}-${DEVICE}-BETA1-KERNEL-AOSP-${TM}.zip
+
+# Specify compiler [ proton, nexus, aosp ]
+COMPILER=neutron
+
+# Clone ToolChain
+function cloneTC() {
+	
+	case $COMPILER in
+	
+		proton)
+			git clone --depth=1  https://github.com/kdrag0n/proton-clang.git clang
+			PATH="${KERNEL_DIR}/clang/bin:$PATH"
+			;;
+		
+		nexus)
+			git clone --depth=1  https://gitlab.com/Project-Nexus/nexus-clang.git clang
+			PATH="${KERNEL_DIR}/clang/bin:$PATH"
+			;;
+
+		neutron)
+			if [ ! -d clang ]; then
+			mkdir clang && cd clang
+			bash <(curl -s https://raw.githubusercontent.com/Neutron-Toolchains/antman/main/antman) -S
+			cd ..
+			else
+			echo "Neutron alreay cloned"
+			fi
+			PATH="${KERNEL_DIR}/clang/bin:$PATH"
+			;;
+
+		nex14)
+			git clone --depth=1  https://gitlab.com/Project-Nexus/nexus-clang.git -b nexus-14 clang
+			PATH="${KERNEL_DIR}/clang/bin:$PATH"
+			;;
+
+		aosp)
+			echo "* Checking if Aosp Clang is already cloned..."
+			if [ -d clangB ]; then
+	  		echo "××××××××××××××××××××××××××××"
+	  		echo "  Already Cloned Aosp Clang"
+	  		echo "××××××××××××××××××××××××××××"
+			else
+			export CLANG_VERSION="clang-r510928"
+			echo "* It's not cloned, cloning it..."
+        		mkdir clangB
+        		cd clangB || exit
+			wget -q https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/master/${CLANG_VERSION}.tgz
+        		tar -xf ${CLANG_VERSION}.tgz
+        		cd .. || exit
+			git clone https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9.git --depth=1 gcc
+			git clone https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9.git  --depth=1 gcc32
+			fi
+			PATH="${KERNEL_DIR}/clangB/bin:${KERNEL_DIR}/gcc/bin:${KERNEL_DIR}/gcc32/bin:${PATH}"
+			;;
+			
+		zyc)
+		    if [ ! -d clang ]; then
+				mkdir clang
+            	cd clang
+		    	wget https://raw.githubusercontent.com/ZyCromerZ/Clang/main/Clang-main-lastbuild.txt
+		    	V="$(cat Clang-main-lastbuild.txt)"
+            	wget -q https://github.com/ZyCromerZ/Clang/releases/download/18.0.0-$V-release/Clang-18.0.0-$V.tar.gz
+	        	tar -xf Clang-18.0.0-$V.tar.gz
+	        	cd ..
+				fi
+	        	PATH="${KERNEL_DIR}/clang/bin:$PATH"
+	        ;;
+	    slim)
+	        git clone --depth=1 https://gitlab.com/ThankYouMario/android_prebuilts_clang-standalone -b slim-16 clangB
+	        git clone https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9.git --depth=1 gcc
+			git clone https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9.git  --depth=1 gcc32
+			PATH="${KERNEL_DIR}/clangB/bin:${KERNEL_DIR}/gcc/bin:${KERNEL_DIR}/gcc32/bin:${PATH}"
+	        ;;
+
+		*)
+			echo "Compiler not defined"
+			;;
+	esac
+        # Clone AnyKernel
+		rm -rf AnyKernel3
+		if [ "${DEVICE}" = "alioth" ]; then
+          git clone --depth=1 https://github.com/NotZeetaa/AnyKernel3 -b alioth AnyKernel3
+        elif [ "${DEVICE}" = "apollo" ]; then
+          git clone --depth=1 https://github.com/NotZeetaa/AnyKernel3 -b apollo AnyKernel3
+        elif [ "${DEVICE}" = "munch" ]; then
+          git clone --depth=1 https://github.com/NotZeetaa/AnyKernel3 -b munch AnyKernel3
+		elif [ "${DEVICE}" = "cas" ]; then
+          git clone --depth=1 https://github.com/NotZeetaa/AnyKernel3 -b cas AnyKernel3
+		elif [ "${DEVICE}" = "cmi" ]; then
+          git clone --depth=1 https://github.com/NotZeetaa/AnyKernel3 -b cmi AnyKernel3
+		elif [ "${DEVICE}" = "umi" ]; then
+          git clone --depth=1 https://github.com/NotZeetaa/AnyKernel3 -b umi AnyKernel3
+		else
+		  git clone --depth=1 https://github.com/NotZeetaa/AnyKernel3 -b lmi AnyKernel3
+		fi
+	}
+	
+# Export Variables
+function exports() {
+	
+        # Export KBUILD_COMPILER_STRING
+        if [ -d ${KERNEL_DIR}/clang ];
+           then
+               export KBUILD_COMPILER_STRING=$(${KERNEL_DIR}/clang/bin/clang --version | head -n 1 | perl -pe 's/\(http.*?\)//gs' | sed -e 's/  */ /g' -e 's/[[:space:]]*$//')
+        elif [ -d ${KERNEL_DIR}/gcc64 ];
+           then
+               export KBUILD_COMPILER_STRING=$("$KERNEL_DIR/gcc64"/bin/aarch64-elf-gcc --version | head -n 1)
+        elif [ -d ${KERNEL_DIR}/clangB ];
+            then
+               export KBUILD_COMPILER_STRING=$(${KERNEL_DIR}/clangB/bin/clang --version | head -n 1 | perl -pe 's/\(http.*?\)//gs' | sed -e 's/  */ /g' -e 's/[[:space:]]*$//')
+        fi
+        
+        # Export ARCH and SUBARCH
+        export ARCH=arm64
+        export SUBARCH=arm64
+               
+        # KBUILD HOST and USER
+        export KBUILD_BUILD_HOST=ArchLinux
+        export KBUILD_BUILD_USER="NotZeeta"
+        
+        # CI
+        if [ "$CI" ]
+           then
+               
+           if [ "$CIRCLECI" ]
+              then
+                  export KBUILD_BUILD_VERSION=${CIRCLE_BUILD_NUM}
+                  export CI_BRANCH=${CIRCLE_BRANCH}
+           elif [ "$DRONE" ]
+	      then
+		  export KBUILD_BUILD_VERSION=${DRONE_BUILD_NUMBER}
+		  export CI_BRANCH=${DRONE_BRANCH}
+           fi
+		   
+        fi
+	export PROCS=$(nproc --all)
+	export DISTRO=$(source /etc/os-release && echo "${NAME}")
+	}
+
+# Telegram Bot Integration
+
+function post_msg() {
+	curl -s -X POST "https://api.telegram.org/bot1446507242:AAFivf422Yvh3CL7y98TJmxV1KgyKByuPzM/sendMessage" \
+	-d chat_id="-1001421078455" \
+	-d "disable_web_page_preview=true" \
+	-d "parse_mode=html" \
+	-d text="$1"
+	}
+
+function push() {
+	curl -F document=@$1 "https://api.telegram.org/bot1446507242:AAFivf422Yvh3CL7y98TJmxV1KgyKByuPzM/sendDocument" \
+	-F chat_id="-1001421078455" \
+	-F "disable_web_page_preview=true" \
+	-F "parse_mode=html" \
+	-F caption="$2"
+	}
+
+# Compilation
+
+METHOD=$3
+
+function compile() {
+START=$(date +"%s")
+	# Push Notification
+	post_msg "<b>$KBUILD_BUILD_VERSION CI Build Triggered</b>%0A<b>Docker OS: </b><code>$DISTRO</code>%0A<b>Kernel Version : </b><code>$KERVER</code>%0A<b>Date : </b><code>$(TZ=Europe/Lisbon date)</code>%0A<b>Device : </b><code>$MODEL [$DEVICE]</code>%0A<b>Pipeline Host : </b><code>$KBUILD_BUILD_HOST</code>%0A<b>Host Core Count : </b><code>$PROCS</code>%0A<b>Compiler Used : </b><code>$KBUILD_COMPILER_STRING</code>%0A<b>Branch : </b><code>$CI_BRANCH</code>%0A<b>Top Commit : </b><a href='$DRONE_COMMIT_LINK'>$COMMIT_HEAD</a>"
+	
+	# Compile
+	if [ -d ${KERNEL_DIR}/clang ];
+	   then
+           make O=out CC=clang ARCH=arm64 ${DEFCONFIG}
+		   if [ "$METHOD" = "lto" ]; then
+		     scripts/config --file ${OUT_DIR}/.config \
+             -e LTO_CLANG \
+             -d THINLTO
+           fi
+	       make -kj$(nproc --all) O=out \
+	       ARCH=arm64 \
+	       LLVM=1 \
+	       LLVM_IAS=1 \
+	       CROSS_COMPILE=aarch64-linux-gnu- \
+	       CROSS_COMPILE_COMPAT=arm-linux-gnueabi- \
+	       V=$VERBOSE 2>&1 | tee error.log
+	elif [ -d ${KERNEL_DIR}/gcc64 ];
+	   then
+           make O=out ARCH=arm64 ${DEFCONFIG}
+	       make -kj$(nproc --all) O=out \
+	       ARCH=arm64 \
+	       CROSS_COMPILE_COMPAT=arm-eabi- \
+	       CROSS_COMPILE=aarch64-elf- \
+	       AR=llvm-ar \
+	       NM=llvm-nm \
+	       OBJCOPY=llvm-objcopy \
+	       OBJDUMP=llvm-objdump \
+	       STRIP=llvm-strip \
+	       OBJSIZE=llvm-size \
+	       V=$VERBOSE 2>&1 | tee error.log
+        elif [ -d ${KERNEL_DIR}/clangB ];
+           then
+           make O=out CC=clang ARCH=arm64 ${DEFCONFIG}
+		   if [ "$METHOD" = "lto" ]; then
+		     scripts/config --file ${OUT_DIR}/.config \
+             -e LTO_CLANG \
+             -d THINLTO
+           fi
+           make -kj$(nproc --all) O=out \
+	       ARCH=arm64 \
+	       LLVM=1 \
+	       LLVM_IAS=1 \
+	       CLANG_TRIPLE=aarch64-linux-gnu- \
+	       CROSS_COMPILE=aarch64-linux-android- \
+	       CROSS_COMPILE_COMPAT=arm-linux-androideabi- \
+	       V=$VERBOSE 2>&1 | tee error.log
+	fi
+	
+	# Verify Files
+	if ! [ -a "$IMAGE" ];
+	   then
+	       push "error.log" "Build Throws Errors"
+	       exit 1
+	fi
+	}
+	
+function compile_ksu() {
+START=$(date +"%s")
+	# Compile
+	if [ -d ${KERNEL_DIR}/clang ];
+	   then
+           make O=out CC=clang ARCH=arm64 ${DEFCONFIG}
+		   if [ "$METHOD" = "lto" ]; then
+		     scripts/config --file ${OUT_DIR}/.config \
+             -e LTO_CLANG \
+             -d THINLTO
+           fi
+	       make -kj$(nproc --all) O=out \
+	       ARCH=arm64 \
+	       LLVM=1 \
+	       LLVM_IAS=1 \
+	       CROSS_COMPILE=aarch64-linux-gnu- \
+	       CROSS_COMPILE_COMPAT=arm-linux-gnueabi- \
+	       V=$VERBOSE 2>&1 | tee error.log
+	elif [ -d ${KERNEL_DIR}/gcc64 ];
+	   then
+           make O=out ARCH=arm64 ${DEFCONFIG}
+	       make -kj$(nproc --all) O=out \
+	       ARCH=arm64 \
+	       CROSS_COMPILE_COMPAT=arm-eabi- \
+	       CROSS_COMPILE=aarch64-elf- \
+	       AR=llvm-ar \
+	       NM=llvm-nm \
+	       OBJCOPY=llvm-objcopy \
+	       OBJDUMP=llvm-objdump \
+	       STRIP=llvm-strip \
+	       OBJSIZE=llvm-size \
+	       V=$VERBOSE 2>&1 | tee error.log
+        elif [ -d ${KERNEL_DIR}/clangB ];
+           then
+           make O=out CC=clang ARCH=arm64 ${DEFCONFIG}
+		   if [ "$METHOD" = "lto" ]; then
+		     scripts/config --file ${OUT_DIR}/.config \
+             -e LTO_CLANG \
+             -d THINLTO
+           fi
+           make -kj$(nproc --all) O=out \
+	       ARCH=arm64 \
+	       LLVM=1 \
+	       LLVM_IAS=1 \
+	       CLANG_TRIPLE=aarch64-linux-gnu- \
+	       CROSS_COMPILE=aarch64-linux-android- \
+	       CROSS_COMPILE_COMPAT=arm-linux-androideabi- \
+	       V=$VERBOSE 2>&1 | tee error.log
+	fi
+	
+	# Verify Files
+	if ! [ -a "$IMAGE" ];
+	   then
+	       push "error.log" "Build Throws Errors"
+	       exit 1
+	   else
+	       post_msg " Kernel Compilation Finished. Started Zipping "
+	fi
 }
 
-#
-# Clones anykernel
-clone_ak(){
-  if [ -a "$AK3" ]; then
-    echo -e "${YELLOW}===> ${BLUE}AnyKernel3 exist${WHITE}"
-    echo -e "${YELLOW}===> ${BLUE}Try to update repo${WHITE}"
-    cd $AK3
-    git pull
-    cd -
-  else
-    echo -e "${YELLOW}===> ${BLUE}Cloning AnyKernel3${WHITE}"
-    git clone -q --depth=1 -b alioth https://github.com/Mengkernel/AnyKernel3.git $AK3
-  fi
+# Zipping
+function move() {
+	# Copy Files To AnyKernel3 Zip
+	mv $IMAGE AnyKernel3
+    mv $DTBO AnyKernel3
+    mv $DTB AnyKernel3
 }
 
-#
-# send_info - sends text to telegram
-send_info(){
-  if [ "$1" == "miui" ]; then
-    CAPTION=$(echo -e \
-    "MIUI Build started
-Date: <code>${BUILD_DATE}</code>
-HEAD: <code>${COMMIT_SHA}</code>
-Commit: <code>${COMMIT}</code>
-Branch: <code>${KERNEL_BRANCH}</code>
-")
-  else
-    CAPTION=$(echo -e \
-    "Build started
-Date: <code>${BUILD_DATE}</code>
-HEAD: <code>${COMMIT_SHA}</code>
-Commit: <code>${COMMIT}</code>
-Branch: <code>${KERNEL_BRANCH}</code>
-")
-  fi
-  curl -s "https://api.telegram.org/bot1446507242:AAFivf422Yvh3CL7y98TJmxV1KgyKByuPzM/sendMessage" \
-    -F parse_mode=html \
-    -F text="$CAPTION" \
-    -F chat_id="-1001421078455" > /dev/null 2>&1
+function move_ksu() {
+	mv $IMAGE AnyKernel3/ksu/
 }
 
-#
-# send_file - uploads file to telegram
-send_file(){
-  curl -F document=@"$1"  "https://api.telegram.org/bot1446507242:AAFivf422Yvh3CL7y98TJmxV1KgyKByuPzM/sendDocument" \
-    -F chat_id="-1001421078455" \
-    -F caption="$2" \
-    -F parse_mode=html > /dev/null 2>&1
+function zipping() {
+    # Zipping and Push Kernel
+    cd AnyKernel3 || exit 1
+    zip -r9 ${FINAL_ZIP} *
+    MD5CHECK=$(md5sum "$FINAL_ZIP" | cut -d' ' -f1)
+    UPLOAD_GOFILE=$(curl -F file=@$FINAL_ZIP https://store1.gofile.io/uploadFile)
+    DOWNLOAD_LINK_GOFILE=$(echo $UPLOAD_GOFILE | awk -F '"' '{print $10}')
+    push "$FINAL_ZIP" "Build took : $(($DIFF / 60)) minute(s) and $(($DIFF % 60)) second(s) | For <b>$MODEL ($DEVICE)</b> | <b>${KBUILD_COMPILER_STRING}</b> | <b>MD5 Checksum : </b><code>$MD5CHECK</code> | GOFILE Download link: $DOWNLOAD_LINK_GOFILE"
+    cd ..
+    rm -rf AnyKernel3
 }
 
-#
-# send_file_nocap - uploads file to telegram without caption
-send_file_nocap(){
-  curl -F document=@"$1"  "https://api.telegram.org/bot1446507242:AAFivf422Yvh3CL7y98TJmxV1KgyKByuPzM/sendDocument" \
-    -F chat_id="-1001421078455" \
-    -F parse_mode=html > /dev/null 2>&1
-}
-
-#
-# miui_patch - apply custom patch before build
-miui_patch(){
-  git apply patch/miui-panel-dimension.patch
-}
-
-#
-# build_kernel
-build_kernel(){
-  cd $KERNEL_DIR
-  if [ "$PGO" != "true" ]; then
-    rm -rf out
-    mkdir -p out
-  fi
-  if [ "$1" == "miui" ]; then
-    miui_patch
-  fi
-  BUILD_START=$(date +"%s")
-  if [ "$LTO" == "true" ]; then
-    if [ "$GCC" == "true" ]; then
-      ./scripts/config --file arch/arm64/configs/cat_defconfig -e LTO_GCC
-    else
-      ./scripts/config --file arch/arm64/configs/cat_defconfig -e LTO_CLANG
-    fi
-  fi
-  if [ "$CAT" == "true" ]; then
-    ./scripts/config --file arch/arm64/configs/cat_defconfig -e CAT_OPTIMIZE; fi
-  if [ "$GCOV" == "true" ]; then
-    ./scripts/config --file arch/arm64/configs/cat_defconfig -e GCOV_KERNEL -e GCOV_PROFILE_ALL; fi
-  if [ "$PGO" == "true" ]; then
-    ./scripts/config --file arch/arm64/configs/cat_defconfig -e PGO; fi
-  if [ "$DCE" == "true" ]; then
-    ./scripts/config --file arch/arm64/configs/cat_defconfig -e LD_DEAD_CODE_DATA_ELIMINATION; fi
-  if [ "$GCC" == "true" ]; then
-    make -j${NPROC} O=out cat_defconfig CROSS_COMPILE=aarch64-linux-gnu- |& tee -a $LOG
-    make -j${NPROC} O=out CROSS_COMPILE=aarch64-linux-gnu- |& tee -a $LOG
-  else
-    make -j${NPROC} O=out cat_defconfig LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- |& tee -a $LOG
-    make -j${NPROC} O=out LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- |& tee -a $LOG
-  fi
-  BUILD_END=$(date +"%s")
-  DIFF=$((BUILD_END - BUILD_START))
-}
-
-#
-# build_end - creates and sends zip
-build_end(){
-  rm -rf ${AK3}/Kucing* ${AK3}/MIUI-Kucing* ${AK3}/dtb* ${AK3}/Image*
-  if [ -a "$KERNEL_IMG_GZ_DTB" ]; then
-    mv $KERNEL_IMG_GZ_DTB $AK3
-  elif [ -a "$KERNEL_IMG_DTB" ]; then
-    mv $KERNEL_IMG_DTB $AK3
-  elif [ -a "$KERNEL_IMG" ]; then
-    mv $KERNEL_IMG $AK3
-  else
-    echo -e "${YELLOW}===> ${RED}Build failed, sad${WHITE}"
-    echo -e "${YELLOW}===> ${GREEN}Send build log to Telegram${WHITE}"
-    send_file $LOG "$ZIP_NAME log"
-    exit 1
-  fi
-  echo -e "${YELLOW}===> ${GREEN}Build success, generating flashable zip...${WHITE}"
-  find ${KERNEL_DIR}/out/arch/arm64/boot/dts/vendor/qcom -name '*.dtb' -exec cat {} + > $KERNEL_DTB
-  ls ${KERNEL_DIR}/out/arch/arm64/boot/
-  cp $KERNEL_DTBO $AK3
-  cp $KERNEL_DTB $AK3
-  cd $AK3
-  DTBO_NAME=${KERNEL_NAME}-DTBO-${DATE}-${COMMIT_SHA}.img
-  DTB_NAME=${KERNEL_NAME}-DTB-${DATE}-${COMMIT_SHA}
-  ZIP_NAME=${KERNEL_NAME}-${DATE}-${COMMIT_SHA}.zip
-  if [ "$CLANG" == "true" ]; then
-    ZIP_NAME=CLANG-${ZIP_NAME}; fi
-  if [ "$GCC" == "true" ]; then
-    ZIP_NAME=GCC-${ZIP_NAME}; fi
-  if [ "$CAT" == "true" ]; then
-    ZIP_NAME=OPT-${ZIP_NAME}; fi
-  if [ "$LTO" == "true" ]; then
-    ZIP_NAME=LTO-${ZIP_NAME}; fi
-  if [ "$PGO" == "true" ]; then
-    ZIP_NAME=PGO-${ZIP_NAME}; fi
-  if [ "$DCE" == "true" ]; then
-    ZIP_NAME=DCE-${ZIP_NAME}; fi
-  if [ "$GCOV" == "true" ]; then
-    ZIP_NAME=GCOV-${ZIP_NAME}; fi
-  if [ "$1" == "miui" ]; then
-    ZIP_NAME=MIUI-${ZIP_NAME}; fi
-  zip -r9 $ZIP_NAME * -x .git .github LICENSE README.md
-  mv $KERNEL_DTBO ${AK3}/${DTBO_NAME}
-  mv $KERNEL_DTB ${AK3}/${DTB_NAME}
-  echo -e "${YELLOW}===> ${BLUE}Send kernel to Telegram${WHITE}"
-  send_file $ZIP_NAME "Time taken: <code>$((DIFF / 60))m $((DIFF % 60))s</code>"
-  echo -e "${YELLOW}===> ${WHITE}Zip name: ${GREEN}${ZIP_NAME}"
-  send_file ${KERNEL_DIR}/out/.config "$ZIP_NAME defconfig"
-#  echo -e "${YELLOW}===> ${BLUE}Send dtbo.img to Telegram${WHITE}"
-#  send_file ${DTBO_NAME}
-#  echo -e "${YELLOW}===> ${BLUE}Send dtb to Telegram${WHITE}"
-#  send_file ${DTB_NAME}
-#  echo -e "${YELLOW}===> ${RED}Send build log to Telegram${WHITE}"
-  send_file $LOG "$ZIP_NAME log"
-}
-
-COMMIT=$(git log --pretty=format:"%s" -1)
-COMMIT_SHA=$(git rev-parse --short HEAD)
-KERNEL_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-BUILD_DATE=$(date)
-CAPTION=$(echo -e \
-"Build started
-Date: <code>$BUILD_DATE</code>
-HEAD: <code>$COMMIT_SHA</code>
-Commit: <code>$COMMIT</code>
-Branch: <code>$KERNEL_BRANCH</code>
-")
-
-#
-# build_all - run build script
-build_all(){
-  FLAG=$1
-  send_info $FLAG
-  build_kernel $FLAG
-  build_end $FLAG
-}
-
-#
-# compile time
-clone_tc
-clone_ak
-build_all
-#build_all miui
+cloneTC
+exports
+compile
+END=$(date +"%s")
+DIFF=$(($END - $START))
+move
+# KernelSU
+echo "CONFIG_KSU=y" >> $(pwd)/arch/arm64/configs/$DEFCONFIG
+compile_ksu
+move_ksu
+zipping
+if [ "$BUILD" = "local" ]; then
+# Discard KSU changes in defconfig
+git restore arch/arm64/configs/$DEFCONFIGf
+fi
