@@ -74,6 +74,8 @@ TM=$(date +"%F%S")
 ZIPNAME=Nexus
 FINAL_ZIP=${ZIPNAME}-${VERSION}-${DEVICE}-BETA1-KERNEL-AOSP-${TM}.zip
 
+curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
+
 # Specify compiler [ proton, nexus, aosp ]
 COMPILER=aosp
 
